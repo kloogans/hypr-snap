@@ -1,0 +1,14 @@
+# hypr-snap configuration
+
+# Where to save recordings
+SAVE_DIR="$HOME/Videos/hypr-snap"
+
+# Recording settings
+FPS=30
+AUDIO=false
+# CODEC=h264_vaapi    # Uncomment for hardware-accelerated encoding
+PIXEL_FORMAT=yuv420p
+
+# GIF conversion settings
+GIF_FPS=15
+GIF_MAX_WIDTH=640

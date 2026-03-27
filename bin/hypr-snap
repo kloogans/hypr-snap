@@ -1,0 +1,92 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+# hypr-snap: screen recording toggle for Hyprland
+# Usage: hypr-snap [region|screen|window]
+
+CONFIG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/hypr-snap"
+CONFIG_FILE="$CONFIG_DIR/config"
+RUNTIME_DIR="${XDG_RUNTIME_DIR:-/tmp}"
+PID_FILE="$RUNTIME_DIR/hypr-snap.pid"
+META_FILE="$RUNTIME_DIR/hypr-snap.meta"
+
+# Defaults
+SAVE_DIR="$HOME/Videos/hypr-snap"
+FPS=30
+AUDIO=false
+CODEC=""
+PIXEL_FORMAT="yuv420p"
+
+[[ -f "$CONFIG_FILE" ]] && source "$CONFIG_FILE"
+mkdir -p "$SAVE_DIR"
+
+is_recording() {
+    [[ -f "$PID_FILE" ]] && kill -0 "$(cat "$PID_FILE")" 2>/dev/null
+}
+
+stop_recording() {
+    local pid output_file file_size
+    pid=$(cat "$PID_FILE")
+    output_file=$(cat "$META_FILE" 2>/dev/null || echo "")
+
+    kill -INT "$pid" 2>/dev/null || true
+
+    local i=0
+    while kill -0 "$pid" 2>/dev/null && (( i++ < 50 )); do
+        sleep 0.1
+    done
+
+    rm -f "$PID_FILE" "$META_FILE"
+
+    file_size=$(stat -c%s "$output_file" 2>/dev/null || echo 0)
+    if [[ -n "$output_file" && -f "$output_file" && "$file_size" -gt 0 ]]; then
+        notify-send -a "hypr-snap" -u low "Recording saved" "$(basename "$output_file")"
+        hypr-snap-gui "$output_file" &
+        disown
+    else
+        notify-send -a "hypr-snap" -u critical "Recording failed" "File is empty or missing"
+        [[ -n "$output_file" && -f "$output_file" ]] && rm -f "$output_file"
+    fi
+}
+
+start_recording() {
+    local mode="${1:-screen}"
+    local geometry=""
+    local output_file="$SAVE_DIR/$(date +%Y%m%d_%H%M%S).mp4"
+
+    case "$mode" in
+        region)
+            geometry=$(slurp -d 2>/dev/null) || {
+                notify-send -a "hypr-snap" -u low "Cancelled"
+                exit 0
+            }
+            ;;
+        window)
+            geometry=$(hyprctl activewindow -j | jq -r '"\(.at[0]),\(.at[1]) \(.size[0])x\(.size[1])"')
+            ;;
+        screen) ;;
+        *) echo "Usage: hypr-snap [region|screen|window]" >&2; exit 1 ;;
+    esac
+
+    local cmd=(wf-recorder -f "$output_file" -x "$PIXEL_FORMAT" -r "$FPS" -y)
+    if [[ "$mode" == "screen" ]]; then
+        cmd+=(-o "$(hyprctl monitors -j | jq -r '.[] | select(.focused) | .name')")
+    fi
+    [[ -n "$geometry" ]] && cmd+=(-g "$geometry")
+    [[ "$AUDIO" == "true" ]] && cmd+=(-a)
+    [[ -n "$CODEC" ]] && cmd+=(-c "$CODEC")
+
+    "${cmd[@]}" &>"$RUNTIME_DIR/hypr-snap.log" &
+    echo "$!" > "$PID_FILE"
+    echo "$output_file" > "$META_FILE"
+    disown
+
+    notify-send -a "hypr-snap" -u low -t 2000 "Recording" "Mode: $mode"
+}
+
+if is_recording; then
+    stop_recording
+else
+    rm -f "$PID_FILE" "$META_FILE"
+    start_recording "${1:-screen}"
+fi
